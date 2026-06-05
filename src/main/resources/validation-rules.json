@@ -1,0 +1,64 @@
+{
+  "requestTypes": {
+    "SIGNUP": {
+      "user": {
+        "required": true,
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "ip": {
+        "required": true,
+        "minLength": 7,
+        "maxLength": 45
+      }
+    },
+    "LOGIN": {
+      "user": {
+        "required": true,
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "ip": {
+        "required": true,
+        "minLength": 7,
+        "maxLength": 45
+      }
+    },
+    "MESSAGE": {
+      "from": {
+        "required": true,
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "to": {
+        "required": true,
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "content": {
+        "required": true,
+        "minLength": 1,
+        "maxLength": 2048
+      }
+    },
+    "QUERY": {
+      "keyword": {
+        "required": true,
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "UPLOAD": {
+      "filename": {
+        "required": true,
+        "minLength": 1,
+        "maxLength": 255
+      },
+      "size": {
+        "required": true,
+        "min": 1,
+        "max": 104857600
+      }
+    }
+  }
+}
