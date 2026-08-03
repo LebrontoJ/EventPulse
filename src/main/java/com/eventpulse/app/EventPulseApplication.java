@@ -1,5 +1,6 @@
 package com.eventpulse.app;
 
+import com.eventpulse.config.ApplicationConfig;
 import com.eventpulse.config.ReloadableValidationRulesProvider;
 import com.eventpulse.config.ValidationConfigLoaderFactory;
 import com.eventpulse.kafka.KafkaConsumerSettings;
@@ -16,7 +17,6 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.Objects;
-import java.util.Optional;
 
 public final class EventPulseApplication {
     private static final Logger log = LoggerFactory.getLogger(EventPulseApplication.class);
@@ -25,22 +25,24 @@ public final class EventPulseApplication {
     }
 
     public static void main(String[] args) throws ConfigurationException, URISyntaxException {
-        Path validationRulesPath = validationRulesPath();
+        ApplicationConfig config = ApplicationConfig.load();
+
+        Path validationRulesPath = validationRulesPath(config);
         ReloadableValidationRulesProvider rulesProvider = new ReloadableValidationRulesProvider(
                 validationRulesPath,
                 ValidationConfigLoaderFactory.forPath(validationRulesPath)
         );
 
         ThreadPoolSettings threadPoolSettings = new ThreadPoolSettings(
-                intProperty("threadpool.core.size", 4),
-                intProperty("threadpool.max.size", 8),
-                intProperty("threadpool.queue.capacity", 1000)
+                config.getInt("threadpool.core.size", 4),
+                config.getInt("threadpool.max.size", 8),
+                config.getInt("threadpool.queue.capacity", 1000)
         );
         KafkaConsumerSettings kafkaSettings = new KafkaConsumerSettings(
-                property("kafka.bootstrap.servers", "localhost:9092"),
-                property("kafka.topic", "requests"),
-                property("kafka.group.id", "eventpulse-v1"),
-                intProperty("kafka.poll.timeout.ms", 1000)
+                config.get("kafka.bootstrap.servers", "localhost:9092"),
+                config.get("kafka.topic", "requests"),
+                config.get("kafka.group.id", "eventpulse-v1"),
+                config.getInt("kafka.poll.timeout.ms", 1000)
         );
 
         RequestProcessor processor = new RequestProcessor(new RequestParser(), rulesProvider);
@@ -52,9 +54,9 @@ public final class EventPulseApplication {
         }
     }
 
-    private static Path validationRulesPath() throws URISyntaxException {
-        String configuredPath = System.getProperty("validation.rules.path");
-        if (configuredPath != null && !configuredPath.isBlank()) {
+    private static Path validationRulesPath(ApplicationConfig config) throws URISyntaxException {
+        String configuredPath = config.get("validation.rules.path", "");
+        if (!configuredPath.isBlank()) {
             return Path.of(configuredPath);
         }
         URL resource = Objects.requireNonNull(
@@ -62,13 +64,5 @@ public final class EventPulseApplication {
                 "Default validation-rules.yml resource is missing"
         );
         return Path.of(resource.toURI());
-    }
-
-    private static String property(String name, String defaultValue) {
-        return Optional.ofNullable(System.getProperty(name)).orElse(defaultValue);
-    }
-
-    private static int intProperty(String name, int defaultValue) {
-        return Integer.parseInt(property(name, Integer.toString(defaultValue)));
     }
 }
