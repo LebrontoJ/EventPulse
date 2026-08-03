@@ -2,6 +2,7 @@ package com.eventpulse.kafka;
 
 import com.eventpulse.processor.RequestProcessor;
 import com.eventpulse.threading.RequestProcessingExecutor;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -21,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class KafkaRequestConsumer implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(KafkaRequestConsumer.class);
 
-    private final KafkaConsumer<String, String> consumer;
+    private final Consumer<String, String> consumer;
     private final RequestProcessingExecutor executor;
     private final KafkaConsumerSettings settings;
     private final AtomicBoolean running = new AtomicBoolean(true);
@@ -30,7 +31,9 @@ public class KafkaRequestConsumer implements AutoCloseable {
         this(new KafkaConsumer<>(properties(settings)), settings, executor);
     }
 
-    KafkaRequestConsumer(KafkaConsumer<String, String> consumer,
+    // Package-private constructor accepting the Consumer interface (rather than the concrete
+    // KafkaConsumer) so tests can inject org.apache.kafka.clients.consumer.MockConsumer.
+    KafkaRequestConsumer(Consumer<String, String> consumer,
                          KafkaConsumerSettings settings,
                          RequestProcessingExecutor executor) {
         this.consumer = consumer;
