@@ -1,14 +1,18 @@
 # Scrape config for the optional Prometheus service in docker-compose.yml.
-# The EventPulse apps run on the host (not containerized), so targets use
-# host.docker.internal to reach them from inside the Prometheus container.
+#
+# Each job lists two possible targets for the same app: the container service name (when the app
+# runs via `docker compose --profile app up`) and host.docker.internal (when the app runs directly
+# on the host via `mvn compile exec:java`). Whichever one isn't actually running just shows as a
+# failed/absent target in Prometheus - harmless, and it means you don't have to edit this file when
+# switching between the two ways of running the apps.
 global:
   scrape_interval: 10s
 
 scrape_configs:
   - job_name: "eventpulse-consumer"
     static_configs:
-      - targets: ["host.docker.internal:9404"]
+      - targets: ["app:9404", "host.docker.internal:9404"]
 
   - job_name: "eventpulse-generator"
     static_configs:
-      - targets: ["host.docker.internal:9405"]
+      - targets: ["generator:9405", "host.docker.internal:9405"]
