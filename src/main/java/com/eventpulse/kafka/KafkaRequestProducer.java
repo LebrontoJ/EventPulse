@@ -1,6 +1,7 @@
 package com.eventpulse.kafka;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -12,14 +13,16 @@ import java.util.Properties;
 public class KafkaRequestProducer implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(KafkaRequestProducer.class);
 
-    private final KafkaProducer<String, String> producer;
+    private final Producer<String, String> producer;
     private final String topic;
 
     public KafkaRequestProducer(KafkaProducerSettings settings) {
         this(new KafkaProducer<>(properties(settings)), settings.topic());
     }
 
-    KafkaRequestProducer(KafkaProducer<String, String> producer, String topic) {
+    // Package-private constructor accepting the Producer interface (rather than the concrete
+    // KafkaProducer) so tests can inject org.apache.kafka.clients.producer.MockProducer.
+    KafkaRequestProducer(Producer<String, String> producer, String topic) {
         this.producer = producer;
         this.topic = topic;
     }
