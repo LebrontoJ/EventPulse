@@ -5,6 +5,7 @@ import com.eventpulse.config.ReloadableValidationRulesProvider;
 import com.eventpulse.config.ValidationConfigLoaderFactory;
 import com.eventpulse.kafka.KafkaConsumerSettings;
 import com.eventpulse.kafka.KafkaRequestConsumer;
+import com.eventpulse.metrics.EventPulseMetrics;
 import com.eventpulse.parser.RequestParser;
 import com.eventpulse.processor.RequestProcessor;
 import com.eventpulse.threading.RequestProcessingExecutor;
@@ -13,6 +14,7 @@ import com.eventpulse.validation.ConfigurationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
@@ -24,7 +26,7 @@ public final class EventPulseApplication {
     private EventPulseApplication() {
     }
 
-    public static void main(String[] args) throws ConfigurationException, URISyntaxException {
+    public static void main(String[] args) throws ConfigurationException, URISyntaxException, IOException {
         ApplicationConfig config = ApplicationConfig.load();
 
         Path validationRulesPath = validationRulesPath(config);
@@ -44,10 +46,14 @@ public final class EventPulseApplication {
                 config.get("kafka.group.id", "eventpulse-v1"),
                 config.getInt("kafka.poll.timeout.ms", 1000)
         );
+        boolean metricsEnabled = Boolean.parseBoolean(config.get("metrics.enabled", "true"));
+        int metricsPort = config.getInt("metrics.port", 9404);
 
         RequestProcessor processor = new RequestProcessor(new RequestParser(), rulesProvider);
-        try (RequestProcessingExecutor executor = new RequestProcessingExecutor(threadPoolSettings);
-             KafkaRequestConsumer consumer = new KafkaRequestConsumer(kafkaSettings, executor)) {
+        try (EventPulseMetrics metrics = EventPulseMetrics.start(metricsEnabled, metricsPort);
+             RequestProcessingExecutor executor = new RequestProcessingExecutor(threadPoolSettings);
+             KafkaRequestConsumer consumer = new KafkaRequestConsumer(kafkaSettings, executor, metrics)) {
+            metrics.bindThreadPool(executor::activeThreadCount, executor::queuedTaskCount, executor::completedTaskCount);
             Runtime.getRuntime().addShutdownHook(new Thread(consumer::close));
             log.info("EventPulse V1 starting with rules={}", validationRulesPath);
             consumer.run(processor);

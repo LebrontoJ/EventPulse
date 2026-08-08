@@ -52,3 +52,19 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+
+  # Optional Prometheus server, scraping the EventPulse apps running on the host (they are not
+  # containerized). Start with: docker compose --profile metrics up -d
+  # Requires the apps to be started with metrics.enabled=true (the default).
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: eventpulse-prometheus
+    profiles: ["metrics"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      # Lets the container reach the host's metrics ports (9404/9405) as host.docker.internal.
+      # Resolves automatically on Docker Desktop; host-gateway makes it work on Linux too.
+      - "host.docker.internal:host-gateway"
