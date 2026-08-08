@@ -14,5 +14,30 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - name: Build and test
-        run: mvn -B test
+      # `verify` runs the full test suite and then the JaCoCo coverage-threshold check bound to the
+      # verify phase (see pom.xml), so a coverage regression fails the build. It also passes through
+      # the package phase, which builds the shaded jar used by the Dockerfile.
+      - name: Build, test, and enforce coverage
+        run: mvn -B verify
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports
+          if-no-files-found: ignore
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco
+          if-no-files-found: ignore
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build application Docker image
+        run: docker build -t eventpulse:ci .

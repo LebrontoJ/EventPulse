@@ -89,6 +89,16 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>0.8.14</version>
+                <configuration>
+                    <!--
+                        Application entry points (main() methods that connect to a real Kafka broker) are
+                        excluded from the coverage count: they aren't realistically unit-testable and would
+                        otherwise drag the ratio down regardless of how well the rest of the code is tested.
+                    -->
+                    <excludes>
+                        <exclude>com/eventpulse/app/*Application.class</exclude>
+                    </excludes>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>
@@ -102,6 +112,33 @@
                             <goal>report</goal>
                         </goals>
                     </execution>
+                    <!--
+                        Fails the build if overall line coverage drops below the threshold. Bound to verify,
+                        so CI (which runs `mvn verify`) enforces it while a plain `mvn test` locally does not.
+                        50% is a conservative starting floor - run `mvn verify` locally and check
+                        target/site/jacoco/index.html for the actual number, then raise this over time.
+                    -->
+                    <execution>
+                        <id>jacoco-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.50</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
             <plugin>
@@ -114,8 +151,9 @@
             </plugin>
             <!--
                 Produces a single runnable jar with all dependencies merged in (target/eventpulse-*.jar),
-                used by the Dockerfile. Bound to the package phase, so it does not run during `mvn test`
-                (used by CI) and has no effect on that workflow.
+                used by the Dockerfile. Bound to the package phase. A plain `mvn test` never reaches it, but
+                CI runs `mvn verify` (see .github/workflows/ci.yml), which passes through package first - so
+                CI also confirms the shaded jar still builds.
             -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
