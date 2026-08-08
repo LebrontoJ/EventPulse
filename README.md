@@ -28,6 +28,42 @@ Prometheus
 Grafana Dashboard
 ```
 
+## Quick Start
+
+There are two ways to run EventPulse. Pick one — mixing them causes port conflicts on `9404`/`9405`
+and duplicate consumers fighting over the same Kafka consumer group.
+
+**Option A: everything in Docker (fastest way to see it working)**
+
+```bash
+cd /Users/lebronjames/Documents/EventPulse
+docker compose --profile app up -d --build
+docker compose logs -f app generator
+```
+
+This starts Kafka, the consumer (`app`), and the request generator (`generator`) together. Rerun the
+same command with `--build` after any code change to rebuild the image.
+
+**Option B: Kafka in Docker, apps run locally via Maven (for iterating on code)**
+
+```bash
+cd /Users/lebronjames/Documents/EventPulse
+docker compose up -d          # Kafka only
+mvn compile exec:java         # terminal A: consumer
+mvn -Pgenerator compile exec:java   # terminal B: generator
+```
+
+See [Start Kafka with Docker Compose](#start-kafka-with-docker-compose),
+[Run the Application in Docker](#run-the-application-in-docker), and
+[Start EventPulse](#start-eventpulse) below for details and options on both paths.
+
+### View It Running
+
+- Logs: `docker compose logs -f app generator` (Docker) or the terminal output (Maven)
+- Consumer metrics: `curl http://localhost:9404/metrics`
+- Generator metrics: `curl http://localhost:9405/metrics`
+- Kafka topic browser: `docker compose --profile ui up -d`, then open `http://localhost:8080`
+
 ## Project Structure
 
 ```text
@@ -253,6 +289,14 @@ via `JAVA_TOOL_OPTIONS=-Dkafka.bootstrap.servers=kafka:19092`. `prometheus.yml` 
 container service names and `host.docker.internal`, so `docker compose --profile metrics up -d` works
 whether the apps run in Docker or directly on the host.
 
+Don't also run `mvn compile exec:java` / `mvn -Pgenerator compile exec:java` on the host while these
+containers are up — both bind the same `9404`/`9405` metrics ports and join the same Kafka consumer
+group, so the second process to start will fail with `Address already in use`. Stop the containers
+first (`docker compose stop app generator`) if you want to switch to running the apps locally.
+
+After changing code, rebuild the image before restarting: `docker compose --profile app up -d --build`.
+Tail logs with `docker compose logs -f app generator`.
+
 To build and run the image manually instead:
 
 ```bash
@@ -326,6 +370,10 @@ mvn test
 ```
 
 ## Start EventPulse
+
+Alternative to `docker compose --profile app up -d` (Option B in Quick Start): run the apps directly
+on the host against the Dockerized (or Homebrew) Kafka broker. Don't run both at once — see the note
+in [Run the Application in Docker](#run-the-application-in-docker).
 
 Start the Kafka consumer service in one terminal:
 
