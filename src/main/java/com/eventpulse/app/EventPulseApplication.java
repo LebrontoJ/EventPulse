@@ -15,10 +15,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.net.URISyntaxException;
-import java.net.URL;
+import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Objects;
+import java.nio.file.StandardCopyOption;
 
 public final class EventPulseApplication {
     private static final Logger log = LoggerFactory.getLogger(EventPulseApplication.class);
@@ -26,7 +26,7 @@ public final class EventPulseApplication {
     private EventPulseApplication() {
     }
 
-    public static void main(String[] args) throws ConfigurationException, URISyntaxException, IOException {
+    public static void main(String[] args) throws ConfigurationException, IOException {
         ApplicationConfig config = ApplicationConfig.load();
 
         Path validationRulesPath = validationRulesPath(config);
@@ -60,15 +60,28 @@ public final class EventPulseApplication {
         }
     }
 
-    private static Path validationRulesPath(ApplicationConfig config) throws URISyntaxException {
+    private static Path validationRulesPath(ApplicationConfig config) throws IOException {
         String configuredPath = config.get("validation.rules.path", "");
         if (!configuredPath.isBlank()) {
             return Path.of(configuredPath);
         }
-        URL resource = Objects.requireNonNull(
-                EventPulseApplication.class.getResource("/validation-rules.yml"),
-                "Default validation-rules.yml resource is missing"
-        );
-        return Path.of(resource.toURI());
+        return extractDefaultValidationRules();
+    }
+
+    // Path.of(resource.toURI()) fails with FileSystemNotFoundException when the resource lives
+    // inside a jar (e.g. the shaded jar used in Docker) rather than on the plain filesystem
+    // (e.g. target/classes when running via `mvn exec:java`). Copying the bundled resource to a
+    // temp file gives every downstream loader (which reads via Files.newInputStream(Path)) a real
+    // filesystem path to work with, regardless of how the app is packaged/run.
+    private static Path extractDefaultValidationRules() throws IOException {
+        try (InputStream resourceStream = EventPulseApplication.class.getResourceAsStream("/validation-rules.yml")) {
+            if (resourceStream == null) {
+                throw new IllegalStateException("Default validation-rules.yml resource is missing");
+            }
+            Path tempFile = Files.createTempFile("eventpulse-validation-rules", ".yml");
+            tempFile.toFile().deleteOnExit();
+            Files.copy(resourceStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            return tempFile;
+        }
     }
 }
