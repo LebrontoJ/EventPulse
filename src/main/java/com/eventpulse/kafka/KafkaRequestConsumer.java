@@ -1,5 +1,7 @@
 package com.eventpulse.kafka;
 
+import com.eventpulse.metrics.EventPulseMetrics;
+import com.eventpulse.processor.ProcessingResult;
 import com.eventpulse.processor.RequestProcessor;
 import com.eventpulse.threading.RequestProcessingExecutor;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -25,20 +27,23 @@ public class KafkaRequestConsumer implements AutoCloseable {
     private final Consumer<String, String> consumer;
     private final RequestProcessingExecutor executor;
     private final KafkaConsumerSettings settings;
+    private final EventPulseMetrics metrics;
     private final AtomicBoolean running = new AtomicBoolean(true);
 
-    public KafkaRequestConsumer(KafkaConsumerSettings settings, RequestProcessingExecutor executor) {
-        this(new KafkaConsumer<>(properties(settings)), settings, executor);
+    public KafkaRequestConsumer(KafkaConsumerSettings settings, RequestProcessingExecutor executor, EventPulseMetrics metrics) {
+        this(new KafkaConsumer<>(properties(settings)), settings, executor, metrics);
     }
 
     // Package-private constructor accepting the Consumer interface (rather than the concrete
     // KafkaConsumer) so tests can inject org.apache.kafka.clients.consumer.MockConsumer.
     KafkaRequestConsumer(Consumer<String, String> consumer,
                          KafkaConsumerSettings settings,
-                         RequestProcessingExecutor executor) {
+                         RequestProcessingExecutor executor,
+                         EventPulseMetrics metrics) {
         this.consumer = consumer;
         this.settings = settings;
         this.executor = executor;
+        this.metrics = metrics;
     }
 
     public void run(RequestProcessor processor) {
@@ -51,11 +56,11 @@ public class KafkaRequestConsumer implements AutoCloseable {
                     ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(settings.pollTimeoutMillis()));
                     List<Future<?>> futures = new ArrayList<>(records.count());
                     for (ConsumerRecord<String, String> record : records) {
-                        futures.add(executor.submit(() -> processor.process(record.value())));
+                        futures.add(executor.submit(() -> processAndRecord(processor, record.value())));
                     }
                     waitForBatch(futures);
                     if (!futures.isEmpty()) {
-                        consumer.commitSync();
+                        commit();
                     }
                 } catch (WakeupException exception) {
                     if (running.get()) {
@@ -67,12 +72,28 @@ public class KafkaRequestConsumer implements AutoCloseable {
             }
         } finally {
             try {
-                consumer.commitSync();
+                commit();
             } catch (RuntimeException exception) {
                 log.warn("Final Kafka commit failed", exception);
             }
             consumer.close();
             log.info("Kafka consumer stopped");
+        }
+    }
+
+    private void processAndRecord(RequestProcessor processor, String rawRequest) {
+        long start = System.nanoTime();
+        ProcessingResult result = processor.process(rawRequest);
+        metrics.recordProcessed(result.status(), System.nanoTime() - start);
+    }
+
+    private void commit() {
+        try {
+            consumer.commitSync();
+            metrics.recordKafkaCommit();
+        } catch (RuntimeException exception) {
+            metrics.recordKafkaCommitFailure();
+            throw exception;
         }
     }
 

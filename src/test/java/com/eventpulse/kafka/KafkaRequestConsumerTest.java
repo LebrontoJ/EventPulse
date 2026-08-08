@@ -2,8 +2,10 @@ package com.eventpulse.kafka;
 
 import com.eventpulse.config.ReloadableValidationRulesProvider;
 import com.eventpulse.config.YamlValidationConfigLoader;
+import com.eventpulse.metrics.EventPulseMetrics;
 import com.eventpulse.parser.RequestParser;
 import com.eventpulse.processor.ProcessingResult;
+import com.eventpulse.processor.ProcessingStatus;
 import com.eventpulse.processor.RequestProcessor;
 import com.eventpulse.threading.RequestProcessingExecutor;
 import com.eventpulse.threading.ThreadPoolSettings;
@@ -63,11 +65,12 @@ class KafkaRequestConsumerTest {
                 new ReloadableValidationRulesProvider(writeRules(), new YamlValidationConfigLoader())
         );
         KafkaConsumerSettings settings = new KafkaConsumerSettings("localhost:9092", TOPIC, "test-group", 50);
+        EventPulseMetrics metrics = EventPulseMetrics.inMemory();
 
         // Single worker thread: keeps processing order deterministic (matching record/offset order)
         // so the assertion below on processed() can compare against an exact expected list.
         try (RequestProcessingExecutor executor = new RequestProcessingExecutor(new ThreadPoolSettings(1, 1, 10));
-             KafkaRequestConsumer consumer = new KafkaRequestConsumer(mockConsumer, settings, executor)) {
+             KafkaRequestConsumer consumer = new KafkaRequestConsumer(mockConsumer, settings, executor, metrics)) {
 
             Thread consumerThread = new Thread(() -> consumer.run(processor));
             consumerThread.setDaemon(true);
@@ -87,6 +90,14 @@ class KafkaRequestConsumerTest {
 
         assertEquals(3L, committedRef.get().get(partition).offset(),
                 "the malformed and invalid records should still advance the committed offset");
+
+        assertEquals(1.0, metrics.requestCount(ProcessingStatus.SUCCESS));
+        assertEquals(1.0, metrics.requestCount(ProcessingStatus.PARSING_ERROR));
+        assertEquals(1.0, metrics.requestCount(ProcessingStatus.VALIDATION_ERROR));
+        assertEquals(0.0, metrics.requestCount(ProcessingStatus.RUNTIME_ERROR));
+        // One commit for the batch of 3, plus the unconditional final commit issued on shutdown.
+        assertEquals(2.0, metrics.kafkaCommitCount());
+        assertEquals(0.0, metrics.kafkaCommitFailureCount());
     }
 
     private Path writeRules() throws Exception {
