@@ -1,5 +1,6 @@
 package com.eventpulse.metrics;
 
+import com.eventpulse.error.ErrorCode;
 import com.eventpulse.processor.ProcessingStatus;
 import io.prometheus.metrics.core.metrics.Counter;
 import io.prometheus.metrics.core.metrics.GaugeWithCallback;
@@ -27,6 +28,10 @@ import java.util.function.LongSupplier;
  *     <li>{@code eventpulse_kafka_commits_total} / {@code eventpulse_kafka_commit_failures_total}</li>
  *     <li>{@code eventpulse_generator_requests_sent_total} - requests sent by the generator</li>
  *     <li>{@code eventpulse_threadpool_active_threads} / {@code _queued_tasks} / {@code _completed_tasks}</li>
+ *     <li>{@code eventpulse_dead_letter_total{error_code}} - messages routed to the dead letter queue</li>
+ *     <li>{@code eventpulse_dead_letter_publish_failures_total} - failures publishing to the DLQ itself</li>
+ *     <li>{@code eventpulse_processing_retries_total} - request processing retry attempts</li>
+ *     <li>{@code eventpulse_consumer_rebalance_events_total{event_type}} - Kafka consumer group rebalance events</li>
  *     <li>standard {@code jvm_*} / {@code process_*} metrics via {@link JvmMetrics}</li>
  * </ul>
  */
@@ -40,6 +45,10 @@ public final class EventPulseMetrics implements AutoCloseable {
     private final Counter kafkaCommitsTotal;
     private final Counter kafkaCommitFailuresTotal;
     private final Counter generatorRequestsTotal;
+    private final Counter deadLetterTotal;
+    private final Counter deadLetterPublishFailuresTotal;
+    private final Counter processingRetriesTotal;
+    private final Counter rebalanceEventsTotal;
 
     private EventPulseMetrics(PrometheusRegistry registry, HTTPServer httpServer) {
         this.registry = registry;
@@ -65,6 +74,24 @@ public final class EventPulseMetrics implements AutoCloseable {
         this.generatorRequestsTotal = Counter.builder()
                 .name("eventpulse_generator_requests_sent_total")
                 .help("Total number of requests sent by the request generator")
+                .register(registry);
+        this.deadLetterTotal = Counter.builder()
+                .name("eventpulse_dead_letter_total")
+                .help("Total number of messages routed to the dead letter queue, by error code")
+                .labelNames("error_code")
+                .register(registry);
+        this.deadLetterPublishFailuresTotal = Counter.builder()
+                .name("eventpulse_dead_letter_publish_failures_total")
+                .help("Total number of failures publishing a message to the dead letter queue")
+                .register(registry);
+        this.processingRetriesTotal = Counter.builder()
+                .name("eventpulse_processing_retries_total")
+                .help("Total number of request processing retry attempts (excludes each first attempt)")
+                .register(registry);
+        this.rebalanceEventsTotal = Counter.builder()
+                .name("eventpulse_consumer_rebalance_events_total")
+                .help("Total number of Kafka consumer group rebalance events, by type")
+                .labelNames("event_type")
                 .register(registry);
     }
 
@@ -118,6 +145,26 @@ public final class EventPulseMetrics implements AutoCloseable {
         generatorRequestsTotal.inc();
     }
 
+    /** Records a message being routed to the dead letter queue, labeled by the failure's error code. */
+    public void recordDeadLetterQueued(ErrorCode errorCode) {
+        deadLetterTotal.labelValues(errorCode.code()).inc();
+    }
+
+    /** Records a failure while publishing a message to the dead letter queue itself. */
+    public void recordDeadLetterPublishFailure() {
+        deadLetterPublishFailuresTotal.inc();
+    }
+
+    /** Records additional processing attempts beyond the first for a single message. */
+    public void recordProcessingRetries(int retryCount) {
+        processingRetriesTotal.inc(retryCount);
+    }
+
+    /** Records a Kafka consumer group rebalance event, labeled "revoked" or "assigned". */
+    public void recordRebalanceEvent(String eventType) {
+        rebalanceEventsTotal.labelValues(eventType).inc();
+    }
+
     /** Current value of {@code eventpulse_requests_total} for the given status. Mainly for tests. */
     public double requestCount(ProcessingStatus status) {
         return requestsTotal.labelValues(status.name().toLowerCase(Locale.ROOT)).get();
@@ -136,6 +183,26 @@ public final class EventPulseMetrics implements AutoCloseable {
     /** Current value of {@code eventpulse_generator_requests_sent_total}. Mainly for tests. */
     public double generatedRequestCount() {
         return generatorRequestsTotal.get();
+    }
+
+    /** Current value of {@code eventpulse_dead_letter_total} for the given error code. Mainly for tests. */
+    public double deadLetterCount(ErrorCode errorCode) {
+        return deadLetterTotal.labelValues(errorCode.code()).get();
+    }
+
+    /** Current value of {@code eventpulse_dead_letter_publish_failures_total}. Mainly for tests. */
+    public double deadLetterPublishFailureCount() {
+        return deadLetterPublishFailuresTotal.get();
+    }
+
+    /** Current value of {@code eventpulse_processing_retries_total}. Mainly for tests. */
+    public double processingRetryCount() {
+        return processingRetriesTotal.get();
+    }
+
+    /** Current value of {@code eventpulse_consumer_rebalance_events_total} for the given event type. Mainly for tests. */
+    public double rebalanceEventCount(String eventType) {
+        return rebalanceEventsTotal.labelValues(eventType).get();
     }
 
     /**

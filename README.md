@@ -80,6 +80,8 @@ EventPulse/
 │   │   ├── java/com/eventpulse/
 │   │   │   ├── app/                Consumer and generator application entry points
 │   │   │   ├── config/             Application config loading and YAML/JSON validation configuration loading
+│   │   │   ├── dlq/                Dead letter queue settings, envelope, and publisher
+│   │   │   ├── error/              ErrorCode taxonomy and the HasErrorCode exception interface
 │   │   │   ├── generator/          Simulated valid and invalid request generation
 │   │   │   ├── kafka/              Kafka producer, consumer, and their settings
 │   │   │   ├── metrics/            Prometheus metrics collection and HTTP exposition
@@ -102,8 +104,10 @@ EventPulse/
 | --- | --- |
 | `app` | `EventPulseApplication` starts the Kafka consumer and processing pipeline. `RequestGeneratorApplication` starts the simulated request producer. |
 | `config` | `ApplicationConfig` resolves layered runtime settings (bundled defaults, external file, `-D` overrides). Also loads YAML or JSON validation files, verifies their schema, selects the loader by file extension, and supports manual rule reloads. |
+| `dlq` | `DeadLetterPublisher` publishes permanently-failed messages (as a `DeadLetterEnvelope` JSON payload) to the configured dead letter queue topic. |
+| `error` | `ErrorCode` gives every failure mode a stable code, description, and retryability flag. `HasErrorCode` lets exceptions expose their code uniformly. |
 | `generator` | Stores generator settings and creates realistic requests with a configurable invalid-request percentage. |
-| `kafka` | Contains Kafka producer/consumer implementations and their validated runtime settings. |
+| `kafka` | Contains Kafka producer/consumer implementations and their validated runtime settings. The consumer retries retryable failures, routes permanent failures to the DLQ, and commits offsets before giving up partitions in a rebalance. |
 | `metrics` | `EventPulseMetrics` collects Prometheus counters/histogram/gauges and optionally serves them over HTTP at `/metrics`. |
 | `parser` | Converts strings such as `MESSAGE\|from=bob\|to=taylor\|content=hello` into structured `ParsedRequest` objects. |
 | `processor` | Coordinates parsing and validation, then classifies results as success, parsing error, validation error, or runtime error. |
@@ -114,9 +118,9 @@ EventPulse/
 
 | Path | Purpose |
 | --- | --- |
-| `docker-compose.yml` | Starts a single-node KRaft Kafka broker on `localhost:9092`, auto-creates the `requests` topic, and optionally starts Kafka UI and/or Prometheus. |
+| `docker-compose.yml` | Starts a single-node KRaft Kafka broker on `localhost:9092`, auto-creates the `requests` and `requests-dlq` topics, and optionally starts Kafka UI and/or Prometheus. |
 | `prometheus.yml` | Scrape config used by the optional `prometheus` docker-compose service. |
-| `src/main/resources/application.properties` | Bundled default runtime settings (Kafka, thread pool, generator, validation path, metrics). |
+| `src/main/resources/application.properties` | Bundled default runtime settings (Kafka, retry/DLQ, thread pool, generator, validation path, metrics). |
 | `src/main/resources/validation-rules.yml` | Default YAML request validation rules. |
 | `src/main/resources/validation-rules.json` | Equivalent JSON request validation rules. |
 | `src/test/java/com/eventpulse/` | Unit tests for parsing, generation, processing, validation and application configuration, settings records, the thread pool, Kafka producer/consumer, and Prometheus metrics. |
@@ -189,6 +193,9 @@ kafka.topic=requests
 kafka.group.id=eventpulse-v1
 kafka.poll.timeout.ms=1000
 kafka.producer.client.id=eventpulse-generator
+kafka.processing.max.attempts=3
+kafka.dlq.topic=requests-dlq
+kafka.dlq.producer.client.id=eventpulse-dlq-producer
 validation.rules.path=
 threadpool.core.size=4
 threadpool.max.size=8
@@ -203,6 +210,35 @@ generator.metrics.port=9405
 
 Only keys already present in `application.properties` can be overridden by an external file or a
 `-D` property, so that file is the single place documenting every supported setting.
+
+### Reliability: Retries, Dead Letter Queue, and Error Codes
+
+Every failure mode has a precise `ErrorCode` (`com.eventpulse.error.ErrorCode`), each carrying a
+stable code, a description, and whether it's worth retrying:
+
+| Error code | Meaning | Retried? |
+| --- | --- | --- |
+| `EP-1000` `PARSE_ERROR` | Request could not be parsed | No - deterministic, same input always fails the same way |
+| `EP-2000` `VALIDATION_ERROR` | Request failed validation rules | No - deterministic |
+| `EP-3000` `RUNTIME_ERROR` | Unexpected error while processing | Yes - may be transient |
+| `EP-4000` `CONFIGURATION_ERROR` | Application configuration could not be loaded | N/A - startup failure |
+| `EP-5000` `DEAD_LETTER_PUBLISH_ERROR` | Failed to publish a message to the DLQ itself | N/A |
+
+`RequestParseException`, `ValidationException`, and `ConfigurationException` all implement
+`HasErrorCode`, so callers can get a precise code without inspecting the exception's class or message.
+
+Only `RUNTIME_ERROR` results are retried, up to `kafka.processing.max.attempts` (default 3) - parsing
+and validation errors skip straight to the dead letter queue since retrying them would just reproduce
+the same failure. Whatever the final outcome, any non-success result is published to the
+`kafka.dlq.topic` topic (default `requests-dlq`) as a JSON `DeadLetterEnvelope`: original topic,
+partition, offset, key, raw request, error code, error message, attempt count, and failure timestamp -
+enough context to inspect or manually replay the message later. The offset is still committed either
+way, so a bad message never blocks the partition.
+
+The consumer also registers a `ConsumerRebalanceListener`: when a partition is about to be revoked
+(the consumer group rebalances), it commits the current offsets synchronously first - the standard
+Kafka pattern for avoiding reprocessing of already-completed work once another consumer picks up the
+partition. Both halves of a rebalance are recorded as `eventpulse_consumer_rebalance_events_total`.
 
 ### Prometheus Metrics
 
@@ -220,6 +256,10 @@ workflow below. Metrics exposed:
 - `eventpulse_kafka_commits_total` / `eventpulse_kafka_commit_failures_total`
 - `eventpulse_generator_requests_sent_total` - requests sent by the generator
 - `eventpulse_threadpool_active_threads` / `_queued_tasks` / `_completed_tasks`
+- `eventpulse_dead_letter_total{error_code}` - messages routed to the dead letter queue
+- `eventpulse_dead_letter_publish_failures_total` - failures publishing to the DLQ itself
+- `eventpulse_processing_retries_total` - request processing retry attempts
+- `eventpulse_consumer_rebalance_events_total{event_type}` - Kafka consumer group rebalance events
 - standard `jvm_*` / `process_*` metrics
 
 Disable the HTTP endpoint (metrics are still collected in-process, just not exposed) with
@@ -353,14 +393,15 @@ Stop the background service when needed:
 brew services stop kafka
 ```
 
-Create the request topic (already done automatically by `docker compose up -d`; only needed for the
-Homebrew path):
+Create the request and dead letter queue topics (already done automatically by `docker compose up -d`;
+only needed for the Homebrew path):
 
 ```bash
 kafka-topics --bootstrap-server localhost:9092 --create --topic requests --partitions 1 --replication-factor 1
+kafka-topics --bootstrap-server localhost:9092 --create --topic requests-dlq --partitions 1 --replication-factor 1
 ```
 
-If the topic already exists, Kafka will report that and you can continue.
+If a topic already exists, Kafka will report that and you can continue.
 
 ## Run Tests
 
@@ -468,10 +509,18 @@ Implemented in V1:
 - Coverage threshold enforcement (`jacoco-maven-plugin` `check` goal, bound to the `verify` phase,
   minimum 50% line coverage; application entry-point `main()` classes are excluded since they require a
   live Kafka broker and aren't realistically unit-testable).
+- Dead letter queue (`DeadLetterPublisher`): runtime errors are retried up to `kafka.processing.max.attempts`
+  (default 3), parsing/validation errors skip straight to the DLQ, and any permanently-failed message is
+  published as a JSON `DeadLetterEnvelope` to the `requests-dlq` topic.
+- Precise error taxonomy (`com.eventpulse.error.ErrorCode`, `HasErrorCode`): every exception exposes a
+  stable code, description, and retryability flag instead of callers inferring failure type from the
+  exception class or message.
+- `ConsumerRebalanceListener` on the Kafka consumer: commits offsets synchronously before partitions are
+  revoked, avoiding reprocessing after a consumer group rebalance.
 
 Not implemented yet:
 
 - Grafana dashboard.
 - User-facing configuration upload API.
 - Integration tests with a real Kafka broker (e.g. via Testcontainers).
-- Dead Letter Queue, Redis, Kubernetes, rate limiting, authentication, and frontend UI.
+- Redis, Kubernetes, rate limiting, authentication, and frontend UI.

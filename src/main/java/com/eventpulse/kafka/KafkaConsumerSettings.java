@@ -4,7 +4,8 @@ public record KafkaConsumerSettings(
         String bootstrapServers,
         String topic,
         String groupId,
-        int pollTimeoutMillis
+        int pollTimeoutMillis,
+        int maxProcessingAttempts
 ) {
     public KafkaConsumerSettings {
         if (bootstrapServers == null || bootstrapServers.isBlank()) {
@@ -18,6 +19,9 @@ public record KafkaConsumerSettings(
         }
         if (pollTimeoutMillis < 1) {
             throw new IllegalArgumentException("pollTimeoutMillis must be >= 1");
+        }
+        if (maxProcessingAttempts < 1) {
+            throw new IllegalArgumentException("maxProcessingAttempts must be >= 1");
         }
     }
 }

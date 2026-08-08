@@ -1,5 +1,6 @@
 package com.eventpulse.metrics;
 
+import com.eventpulse.error.ErrorCode;
 import com.eventpulse.processor.ProcessingStatus;
 import io.prometheus.metrics.model.registry.PrometheusRegistry;
 import io.prometheus.metrics.model.snapshots.GaugeSnapshot;
@@ -65,6 +66,50 @@ class EventPulseMetricsTest {
         // value that was snapshotted once at bind() time.
         active.set(9);
         assertEquals(9.0, gaugeValue(metrics.registry(), "eventpulse_threadpool_active_threads"));
+    }
+
+    @Test
+    void recordsDeadLetterQueuedByErrorCodeIndependently() {
+        EventPulseMetrics metrics = EventPulseMetrics.inMemory();
+
+        metrics.recordDeadLetterQueued(ErrorCode.PARSE_ERROR);
+        metrics.recordDeadLetterQueued(ErrorCode.PARSE_ERROR);
+        metrics.recordDeadLetterQueued(ErrorCode.VALIDATION_ERROR);
+
+        assertEquals(2.0, metrics.deadLetterCount(ErrorCode.PARSE_ERROR));
+        assertEquals(1.0, metrics.deadLetterCount(ErrorCode.VALIDATION_ERROR));
+        assertEquals(0.0, metrics.deadLetterCount(ErrorCode.RUNTIME_ERROR));
+    }
+
+    @Test
+    void recordsDeadLetterPublishFailures() {
+        EventPulseMetrics metrics = EventPulseMetrics.inMemory();
+
+        metrics.recordDeadLetterPublishFailure();
+
+        assertEquals(1.0, metrics.deadLetterPublishFailureCount());
+    }
+
+    @Test
+    void recordsProcessingRetries() {
+        EventPulseMetrics metrics = EventPulseMetrics.inMemory();
+
+        metrics.recordProcessingRetries(2);
+        metrics.recordProcessingRetries(1);
+
+        assertEquals(3.0, metrics.processingRetryCount());
+    }
+
+    @Test
+    void recordsRebalanceEventsByTypeIndependently() {
+        EventPulseMetrics metrics = EventPulseMetrics.inMemory();
+
+        metrics.recordRebalanceEvent("revoked");
+        metrics.recordRebalanceEvent("assigned");
+        metrics.recordRebalanceEvent("assigned");
+
+        assertEquals(1.0, metrics.rebalanceEventCount("revoked"));
+        assertEquals(2.0, metrics.rebalanceEventCount("assigned"));
     }
 
     @Test

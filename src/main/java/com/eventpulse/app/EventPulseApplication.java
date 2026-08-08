@@ -3,6 +3,8 @@ package com.eventpulse.app;
 import com.eventpulse.config.ApplicationConfig;
 import com.eventpulse.config.ReloadableValidationRulesProvider;
 import com.eventpulse.config.ValidationConfigLoaderFactory;
+import com.eventpulse.dlq.DeadLetterPublisher;
+import com.eventpulse.dlq.DeadLetterQueueSettings;
 import com.eventpulse.kafka.KafkaConsumerSettings;
 import com.eventpulse.kafka.KafkaRequestConsumer;
 import com.eventpulse.metrics.EventPulseMetrics;
@@ -44,18 +46,26 @@ public final class EventPulseApplication {
                 config.get("kafka.bootstrap.servers", "localhost:9092"),
                 config.get("kafka.topic", "requests"),
                 config.get("kafka.group.id", "eventpulse-v1"),
-                config.getInt("kafka.poll.timeout.ms", 1000)
+                config.getInt("kafka.poll.timeout.ms", 1000),
+                config.getInt("kafka.processing.max.attempts", 3)
+        );
+        DeadLetterQueueSettings dlqSettings = new DeadLetterQueueSettings(
+                config.get("kafka.bootstrap.servers", "localhost:9092"),
+                config.get("kafka.dlq.topic", "requests-dlq"),
+                config.get("kafka.dlq.producer.client.id", "eventpulse-dlq-producer")
         );
         boolean metricsEnabled = Boolean.parseBoolean(config.get("metrics.enabled", "true"));
         int metricsPort = config.getInt("metrics.port", 9404);
 
         RequestProcessor processor = new RequestProcessor(new RequestParser(), rulesProvider);
         try (EventPulseMetrics metrics = EventPulseMetrics.start(metricsEnabled, metricsPort);
+             DeadLetterPublisher deadLetterPublisher = new DeadLetterPublisher(dlqSettings, metrics);
              RequestProcessingExecutor executor = new RequestProcessingExecutor(threadPoolSettings);
-             KafkaRequestConsumer consumer = new KafkaRequestConsumer(kafkaSettings, executor, metrics)) {
+             KafkaRequestConsumer consumer = new KafkaRequestConsumer(kafkaSettings, executor, metrics, deadLetterPublisher)) {
             metrics.bindThreadPool(executor::activeThreadCount, executor::queuedTaskCount, executor::completedTaskCount);
             Runtime.getRuntime().addShutdownHook(new Thread(consumer::close));
-            log.info("EventPulse V1 starting with rules={}", validationRulesPath);
+            log.info("EventPulse V1 starting with rules={} dlqTopic={} maxProcessingAttempts={}",
+                    validationRulesPath, dlqSettings.topic(), kafkaSettings.maxProcessingAttempts());
             consumer.run(processor);
         }
     }

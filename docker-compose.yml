@@ -26,7 +26,8 @@ services:
       retries: 12
       start_period: 20s
 
-  # One-shot job that creates the 'requests' topic once the broker is healthy, then exits.
+  # One-shot job that creates the 'requests' and 'requests-dlq' topics once the broker is healthy,
+  # then exits.
   kafka-init:
     image: apache/kafka:3.7.1
     container_name: eventpulse-kafka-init
@@ -41,7 +42,9 @@ services:
     command:
       - >
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092
-        --create --if-not-exists --topic requests --partitions 1 --replication-factor 1
+        --create --if-not-exists --topic requests --partitions 1 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092
+        --create --if-not-exists --topic requests-dlq --partitions 1 --replication-factor 1
 
   # Optional web UI for browsing topics/messages. Start with: docker compose --profile ui up -d
   kafka-ui:

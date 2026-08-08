@@ -12,7 +12,9 @@ V1 focuses on the core request processing path:
 6. YAML or JSON validation rules enforce allowed request types and field constraints.
 7. Processing failures are classified and logged without stopping the consumer loop.
 
-Prometheus, Grafana, upload API, DLQ, Docker, and Kubernetes are reserved for later versions.
+Prometheus metrics, Docker (both the app image and Kafka via docker-compose), and a dead letter queue
+with retry/rebalance handling have since been added on top of this V1 scope (see the README's V1
+Implementation Status). Grafana, the upload API, and Kubernetes are still reserved for later versions.
 
 ## Request Format
 
