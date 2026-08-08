@@ -35,9 +35,13 @@ services:
         condition: service_healthy
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
-    command: >
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092
-      --create --if-not-exists --topic requests --partitions 1 --replication-factor 1
+    # Must be a single-item YAML list, not a plain string: Compose word-splits a plain string
+    # `command` before handing it to `-c`, so only the first token would reach the shell and the
+    # rest would become $0/$1/... instead of arguments to kafka-topics.sh.
+    command:
+      - >
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092
+        --create --if-not-exists --topic requests --partitions 1 --replication-factor 1
 
   # Optional web UI for browsing topics/messages. Start with: docker compose --profile ui up -d
   kafka-ui:
@@ -53,9 +57,9 @@ services:
       kafka:
         condition: service_healthy
 
-  # Optional Prometheus server, scraping the EventPulse apps running on the host (they are not
-  # containerized). Start with: docker compose --profile metrics up -d
-  # Requires the apps to be started with metrics.enabled=true (the default).
+  # Optional Prometheus server. Scrapes both the containerized app/generator services below (by
+  # service name) and, if you run the apps on the host instead, host.docker.internal - whichever
+  # is actually running will show as up. Start with: docker compose --profile metrics up -d
   prometheus:
     image: prom/prometheus:latest
     container_name: eventpulse-prometheus
@@ -68,3 +72,38 @@ services:
       # Lets the container reach the host's metrics ports (9404/9405) as host.docker.internal.
       # Resolves automatically on Docker Desktop; host-gateway makes it work on Linux too.
       - "host.docker.internal:host-gateway"
+
+  # Containerized consumer and generator, built from the project's Dockerfile. Optional: the apps
+  # can also be run directly on the host with `mvn compile exec:java` (see README). Start with:
+  # docker compose --profile app up -d --build
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eventpulse:local
+    container_name: eventpulse-app
+    profiles: ["app"]
+    command: ["com.eventpulse.app.EventPulseApplication"]
+    environment:
+      JAVA_TOOL_OPTIONS: "-Dkafka.bootstrap.servers=kafka:19092"
+    ports:
+      - "9404:9404"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  generator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eventpulse:local
+    container_name: eventpulse-generator
+    profiles: ["app"]
+    command: ["com.eventpulse.app.RequestGeneratorApplication"]
+    environment:
+      JAVA_TOOL_OPTIONS: "-Dkafka.bootstrap.servers=kafka:19092"
+    ports:
+      - "9405:9405"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully

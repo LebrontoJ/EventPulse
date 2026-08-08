@@ -33,7 +33,9 @@ Grafana Dashboard
 ```text
 EventPulse/
 ├── pom.xml                         Maven dependencies, plugins, and run profiles
-├── docker-compose.yml              One-command local Kafka (KRaft) + optional Kafka UI + optional Prometheus
+├── Dockerfile                      Multi-stage build producing a runnable image for both apps
+├── .dockerignore                   Excludes target/, .git/, docs/, etc. from the Docker build context
+├── docker-compose.yml              One-command local Kafka (KRaft) + optional Kafka UI/Prometheus/app containers
 ├── prometheus.yml                  Prometheus scrape config for the optional docker-compose service
 ├── docs/
 │   └── v1-design.md                V1 architecture and design decisions
@@ -235,6 +237,39 @@ Stop everything:
 docker compose down
 ```
 
+## Run the Application in Docker
+
+`Dockerfile` builds a single image that can run either app; the same jar serves both entry points, and
+`docker-compose.yml` starts them alongside Kafka via a dedicated `app` profile.
+
+```bash
+docker compose --profile app up -d --build
+```
+
+This starts (in addition to Kafka) an `eventpulse-app` container running `EventPulseApplication`
+(metrics on `localhost:9404`) and an `eventpulse-generator` container running
+`RequestGeneratorApplication` (metrics on `localhost:9405`), both pointed at the containerized broker
+via `JAVA_TOOL_OPTIONS=-Dkafka.bootstrap.servers=kafka:19092`. `prometheus.yml` scrapes both the
+container service names and `host.docker.internal`, so `docker compose --profile metrics up -d` works
+whether the apps run in Docker or directly on the host.
+
+To build and run the image manually instead:
+
+```bash
+docker build -t eventpulse:local .
+
+# Consumer (default CMD)
+docker run --rm -p 9404:9404 -e JAVA_TOOL_OPTIONS="-Dkafka.bootstrap.servers=host.docker.internal:9092" eventpulse:local
+
+# Generator (override the entry point class)
+docker run --rm -p 9405:9405 -e JAVA_TOOL_OPTIONS="-Dkafka.bootstrap.servers=host.docker.internal:9092" eventpulse:local com.eventpulse.app.RequestGeneratorApplication
+```
+
+Any `-D` setting normally passed on the command line (e.g. `-Dconfig.file=...`, `-Dmetrics.port=...`)
+can be supplied the same way via `JAVA_TOOL_OPTIONS`. The image runs as a non-root user and the runnable
+jar is built by the `maven-shade-plugin`, which only runs during `mvn package` (not `mvn test`), so it
+doesn't affect the CI test workflow.
+
 ## Install and Verify Kafka (without Docker)
 
 On macOS, install Kafka with Homebrew:
@@ -377,6 +412,8 @@ Implemented in V1:
 - Prometheus metrics (`EventPulseMetrics`): request outcome counts, processing latency, Kafka commit
   success/failure, thread pool gauges, and generator throughput, exposed over HTTP and scrapeable via
   the optional `docker compose --profile metrics` Prometheus service.
+- Docker image for the application itself (`Dockerfile`, multi-stage build via `maven-shade-plugin`),
+  runnable standalone or via the `docker compose --profile app` services.
 - Unit tests for parser, validation, configuration loading, application configuration, settings records, the thread pool, Kafka producer/consumer (via `MockProducer`/`MockConsumer`), Prometheus metrics, and processing error classification.
 - GitHub Actions CI workflow for Maven tests.
 
@@ -386,5 +423,4 @@ Not implemented yet:
 - User-facing configuration upload API.
 - Integration tests with a real Kafka broker (e.g. via Testcontainers).
 - Coverage threshold enforcement.
-- Docker image for the application itself (Kafka and Prometheus are covered by `docker-compose.yml`).
 - Dead Letter Queue, Redis, Kubernetes, rate limiting, authentication, and frontend UI.
