@@ -16,6 +16,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.10.2</junit.version>
         <prometheus.version>1.8.0</prometheus.version>
+        <logback.version>1.5.6</logback.version>
+        <logstash-logback-encoder.version>7.4</logstash-logback-encoder.version>
         <exec.mainClass>com.eventpulse.app.EventPulseApplication</exec.mainClass>
     </properties>
 
@@ -40,10 +42,21 @@
             <artifactId>slf4j-api</artifactId>
             <version>2.0.13</version>
         </dependency>
+        <!--
+            Structured JSON console logging in place of slf4j-simple: logback-classic is the slf4j
+            binding, logstash-logback-encoder formats each line as JSON so logs are easy to ship to
+            ELK/Loki/etc. Both are runtime-only - main code depends only on slf4j-api.
+        -->
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
-            <version>2.0.13</version>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>${logback.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>${logstash-logback-encoder.version}</version>
             <scope>runtime</scope>
         </dependency>
         <dependency>

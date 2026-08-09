@@ -23,7 +23,10 @@ public class RequestProcessor {
         try {
             ParsedRequest request = parser.parse(rawRequest);
             rulesProvider.validator().validate(request);
-            log.info("Processed request type={} fields={}", request.type(), request.fields().keySet());
+            // DEBUG, not INFO: this fires on every single successfully processed request, which at
+            // any real throughput would drown out the rest of the log. Enable with -DLOG_LEVEL=DEBUG
+            // (or per-package via a <logger> in logback.xml) when you need to see it.
+            log.debug("Processed request type={} fields={}", request.type(), request.fields().keySet());
             return ProcessingResult.success();
         } catch (RequestParseException exception) {
             log.warn("Parsing error for request='{}': {}", rawRequest, exception.getMessage());

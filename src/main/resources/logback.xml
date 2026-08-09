@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Structured JSON logging so EventPulse's output is easy to ship to a log aggregator
+    (ELK, Loki, CloudWatch, etc.) instead of parsing plain text.
+
+    Root level defaults to INFO but can be overridden without touching this file, via either
+    `-DLOG_LEVEL=DEBUG` or the LOG_LEVEL environment variable (handy for Docker/Kubernetes) -
+    Logback's property substitution checks system properties and then the OS environment.
+
+    org.apache.kafka is pinned to WARN by default: the Kafka client library itself logs quite
+    chattily at INFO (rebalance internals, fetch/produce bookkeeping, etc.), which drowns out
+    EventPulse's own logs. Override KAFKA_LOG_LEVEL the same way if you need to debug the client.
+-->
+<configuration>
+    <property name="LOG_LEVEL" value="${LOG_LEVEL:-INFO}" />
+    <property name="KAFKA_LOG_LEVEL" value="${KAFKA_LOG_LEVEL:-WARN}" />
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <!-- Keeps timestamps consistent regardless of the host's default timezone. -->
+            <timeZone>UTC</timeZone>
+        </encoder>
+    </appender>
+
+    <logger name="org.apache.kafka" level="${KAFKA_LOG_LEVEL}" />
+
+    <root level="${LOG_LEVEL}">
+        <appender-ref ref="CONSOLE" />
+    </root>
+</configuration>

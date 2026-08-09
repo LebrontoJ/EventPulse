@@ -91,6 +91,7 @@ services:
       JAVA_TOOL_OPTIONS: "-Dkafka.bootstrap.servers=kafka:19092"
     ports:
       - "9404:9404"
+      - "9414:9414"
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -107,6 +108,7 @@ services:
       JAVA_TOOL_OPTIONS: "-Dkafka.bootstrap.servers=kafka:19092"
     ports:
       - "9405:9405"
+      - "9415:9415"
     depends_on:
       kafka-init:
         condition: service_completed_successfully
