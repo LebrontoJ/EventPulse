@@ -5,8 +5,10 @@ import com.eventpulse.config.ReloadableValidationRulesProvider;
 import com.eventpulse.config.ValidationConfigLoaderFactory;
 import com.eventpulse.dlq.DeadLetterPublisher;
 import com.eventpulse.dlq.DeadLetterQueueSettings;
+import com.eventpulse.health.HealthCheckServer;
 import com.eventpulse.kafka.KafkaConsumerSettings;
 import com.eventpulse.kafka.KafkaRequestConsumer;
+import com.eventpulse.kafka.KafkaSecuritySettings;
 import com.eventpulse.metrics.EventPulseMetrics;
 import com.eventpulse.parser.RequestParser;
 import com.eventpulse.processor.RequestProcessor;
@@ -54,18 +56,23 @@ public final class EventPulseApplication {
                 config.get("kafka.dlq.topic", "requests-dlq"),
                 config.get("kafka.dlq.producer.client.id", "eventpulse-dlq-producer")
         );
+        KafkaSecuritySettings security = KafkaSecuritySettings.fromConfig(config);
         boolean metricsEnabled = Boolean.parseBoolean(config.get("metrics.enabled", "true"));
         int metricsPort = config.getInt("metrics.port", 9404);
+        boolean healthEnabled = Boolean.parseBoolean(config.get("health.enabled", "true"));
+        int healthPort = config.getInt("health.port", 9414);
 
         RequestProcessor processor = new RequestProcessor(new RequestParser(), rulesProvider);
         try (EventPulseMetrics metrics = EventPulseMetrics.start(metricsEnabled, metricsPort);
-             DeadLetterPublisher deadLetterPublisher = new DeadLetterPublisher(dlqSettings, metrics);
+             DeadLetterPublisher deadLetterPublisher = new DeadLetterPublisher(dlqSettings, metrics, security);
              RequestProcessingExecutor executor = new RequestProcessingExecutor(threadPoolSettings);
-             KafkaRequestConsumer consumer = new KafkaRequestConsumer(kafkaSettings, executor, metrics, deadLetterPublisher)) {
+             KafkaRequestConsumer consumer =
+                     new KafkaRequestConsumer(kafkaSettings, executor, metrics, deadLetterPublisher, security);
+             HealthCheckServer healthCheckServer = HealthCheckServer.start(healthEnabled, healthPort, consumer::isReady)) {
             metrics.bindThreadPool(executor::activeThreadCount, executor::queuedTaskCount, executor::completedTaskCount);
             Runtime.getRuntime().addShutdownHook(new Thread(consumer::close));
-            log.info("EventPulse V1 starting with rules={} dlqTopic={} maxProcessingAttempts={}",
-                    validationRulesPath, dlqSettings.topic(), kafkaSettings.maxProcessingAttempts());
+            log.info("EventPulse V1 starting with rules={} dlqTopic={} maxProcessingAttempts={} securityProtocol={}",
+                    validationRulesPath, dlqSettings.topic(), kafkaSettings.maxProcessingAttempts(), security.protocol());
             consumer.run(processor);
         }
     }

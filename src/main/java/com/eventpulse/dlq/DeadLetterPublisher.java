@@ -1,6 +1,7 @@
 package com.eventpulse.dlq;
 
 import com.eventpulse.error.ErrorCode;
+import com.eventpulse.kafka.KafkaSecuritySettings;
 import com.eventpulse.metrics.EventPulseMetrics;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,8 +30,8 @@ public class DeadLetterPublisher implements AutoCloseable {
     private final EventPulseMetrics metrics;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public DeadLetterPublisher(DeadLetterQueueSettings settings, EventPulseMetrics metrics) {
-        this(new KafkaProducer<>(properties(settings)), settings.topic(), metrics);
+    public DeadLetterPublisher(DeadLetterQueueSettings settings, EventPulseMetrics metrics, KafkaSecuritySettings security) {
+        this(new KafkaProducer<>(properties(settings, security)), settings.topic(), metrics);
     }
 
     // Public constructor accepting the Producer interface (rather than the concrete KafkaProducer)
@@ -77,8 +78,20 @@ public class DeadLetterPublisher implements AutoCloseable {
                 log.error("Failed to publish dead letter key={} to topic={}", record.key(), topic, exception);
                 metrics.recordDeadLetterPublishFailure();
             } else {
-                log.info("Published dead letter key={} errorCode={} attempts={} to topic={} partition={} offset={}",
-                        record.key(), errorCode.code(), attempts, metadata.topic(), metadata.partition(), metadata.offset());
+                // WARN, not INFO: landing in the DLQ means a message was NOT successfully processed -
+                // that's worth surfacing prominently, unlike routine per-message success logs. Uses
+                // SLF4J's fluent API so errorCode/attempts/offset are emitted as separate structured
+                // JSON fields (via logstash-logback-encoder) instead of only being embedded in the
+                // message text.
+                log.atWarn()
+                        .setMessage("Published dead letter key={} to topic={} partition={} offset={}")
+                        .addArgument(record.key())
+                        .addArgument(metadata.topic())
+                        .addArgument(metadata.partition())
+                        .addArgument(metadata.offset())
+                        .addKeyValue("errorCode", errorCode.code())
+                        .addKeyValue("attempts", attempts)
+                        .log();
             }
         });
     }
@@ -89,7 +102,7 @@ public class DeadLetterPublisher implements AutoCloseable {
         producer.close();
     }
 
-    private static Properties properties(DeadLetterQueueSettings settings) {
+    private static Properties properties(DeadLetterQueueSettings settings, KafkaSecuritySettings security) {
         Properties properties = new Properties();
         properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, settings.bootstrapServers());
         properties.put(ProducerConfig.CLIENT_ID_CONFIG, settings.clientId());
@@ -97,6 +110,7 @@ public class DeadLetterPublisher implements AutoCloseable {
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         properties.put(ProducerConfig.ACKS_CONFIG, "all");
         properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+        security.applyTo(properties);
         return properties;
     }
 }

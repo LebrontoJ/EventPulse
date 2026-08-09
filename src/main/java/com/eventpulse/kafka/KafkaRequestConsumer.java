@@ -37,12 +37,14 @@ public class KafkaRequestConsumer implements AutoCloseable {
     private final EventPulseMetrics metrics;
     private final DeadLetterPublisher deadLetterPublisher;
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private final AtomicBoolean ready = new AtomicBoolean(false);
 
     public KafkaRequestConsumer(KafkaConsumerSettings settings,
                                  RequestProcessingExecutor executor,
                                  EventPulseMetrics metrics,
-                                 DeadLetterPublisher deadLetterPublisher) {
-        this(new KafkaConsumer<>(properties(settings)), settings, executor, metrics, deadLetterPublisher);
+                                 DeadLetterPublisher deadLetterPublisher,
+                                 KafkaSecuritySettings security) {
+        this(new KafkaConsumer<>(properties(settings, security)), settings, executor, metrics, deadLetterPublisher);
     }
 
     // Package-private constructor accepting the Consumer interface (rather than the concrete
@@ -117,6 +119,14 @@ public class KafkaRequestConsumer implements AutoCloseable {
 
         if (attempts > 1) {
             metrics.recordProcessingRetries(attempts - 1);
+            // DEBUG, not WARN: a message that ultimately succeeded after a retry isn't itself a
+            // problem worth alerting on; eventpulse_processing_retries_total is the metric to watch.
+            log.atDebug()
+                    .setMessage("Retried request key={} before reaching a final outcome")
+                    .addArgument(record.key())
+                    .addKeyValue("attempts", attempts)
+                    .addKeyValue("finalStatus", result.status())
+                    .log();
         }
         if (result.status() != ProcessingStatus.SUCCESS) {
             sendToDeadLetterQueue(record, result, attempts);
@@ -128,7 +138,12 @@ public class KafkaRequestConsumer implements AutoCloseable {
         try {
             deadLetterPublisher.publish(record, errorCode, result.message(), attempts);
         } catch (DeadLetterPublishException exception) {
-            log.error("Could not publish message to dead letter queue key={}", record.key(), exception);
+            log.atError()
+                    .setMessage("Could not publish message to dead letter queue key={}")
+                    .addArgument(record.key())
+                    .addKeyValue("errorCode", errorCode.code())
+                    .setCause(exception)
+                    .log();
         }
     }
 
@@ -172,6 +187,15 @@ public class KafkaRequestConsumer implements AutoCloseable {
     }
 
     /**
+     * Whether this consumer currently holds at least one assigned partition. Intended for a
+     * readiness probe: a consumer with no assigned partitions isn't doing useful work, whether
+     * because it hasn't finished its initial rebalance yet or because it just gave partitions up.
+     */
+    public boolean isReady() {
+        return ready.get();
+    }
+
+    /**
      * Commits the current offsets before partitions are revoked - the standard Kafka pattern for
      * avoiding reprocessing of already-completed work once a partition moves to another consumer
      * in the group - and records both halves of a rebalance as metrics for observability.
@@ -184,6 +208,7 @@ public class KafkaRequestConsumer implements AutoCloseable {
         @Override
         public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
             log.info("Partitions revoked: {}", partitions);
+            ready.set(false);
             try {
                 commit();
             } catch (RuntimeException exception) {
@@ -195,11 +220,12 @@ public class KafkaRequestConsumer implements AutoCloseable {
         @Override
         public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
             log.info("Partitions assigned: {}", partitions);
+            ready.set(!partitions.isEmpty());
             metrics.recordRebalanceEvent("assigned");
         }
     }
 
-    private static Properties properties(KafkaConsumerSettings settings) {
+    private static Properties properties(KafkaConsumerSettings settings, KafkaSecuritySettings security) {
         Properties properties = new Properties();
         properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, settings.bootstrapServers());
         properties.put(ConsumerConfig.GROUP_ID_CONFIG, settings.groupId());
@@ -207,6 +233,7 @@ public class KafkaRequestConsumer implements AutoCloseable {
         properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
         properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        security.applyTo(properties);
         return properties;
     }
 }

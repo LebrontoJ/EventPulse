@@ -60,8 +60,8 @@ See [Start Kafka with Docker Compose](#start-kafka-with-docker-compose),
 ### View It Running
 
 - Logs: `docker compose logs -f app generator` (Docker) or the terminal output (Maven)
-- Consumer metrics: `curl http://localhost:9404/metrics`
-- Generator metrics: `curl http://localhost:9405/metrics`
+- Consumer metrics: `curl http://localhost:9404/metrics` / health: `curl http://localhost:9414/health/ready`
+- Generator metrics: `curl http://localhost:9405/metrics` / health: `curl http://localhost:9415/health/ready`
 - Kafka topic browser: `docker compose --profile ui up -d`, then open `http://localhost:8080`
 
 ## Project Structure
@@ -83,7 +83,8 @@ EventPulse/
 │   │   │   ├── dlq/                Dead letter queue settings, envelope, and publisher
 │   │   │   ├── error/              ErrorCode taxonomy and the HasErrorCode exception interface
 │   │   │   ├── generator/          Simulated valid and invalid request generation
-│   │   │   ├── kafka/              Kafka producer, consumer, and their settings
+│   │   │   ├── health/             Liveness/readiness HTTP endpoints
+│   │   │   ├── kafka/              Kafka producer, consumer, their settings, and security config
 │   │   │   ├── metrics/            Prometheus metrics collection and HTTP exposition
 │   │   │   ├── parser/             Raw request parsing and parsed request model
 │   │   │   ├── processor/          Parse-and-validate processing pipeline
@@ -91,6 +92,7 @@ EventPulse/
 │   │   │   └── validation/         Validation rules, engine, and exceptions
 │   │   └── resources/
 │   │       ├── application.properties
+│   │       ├── logback.xml         Structured JSON logging configuration
 │   │       ├── validation-rules.yml
 │   │       └── validation-rules.json
 │   └── test/java/com/eventpulse/   Unit tests organized by application package
@@ -107,7 +109,8 @@ EventPulse/
 | `dlq` | `DeadLetterPublisher` publishes permanently-failed messages (as a `DeadLetterEnvelope` JSON payload) to the configured dead letter queue topic. |
 | `error` | `ErrorCode` gives every failure mode a stable code, description, and retryability flag. `HasErrorCode` lets exceptions expose their code uniformly. |
 | `generator` | Stores generator settings and creates realistic requests with a configurable invalid-request percentage. |
-| `kafka` | Contains Kafka producer/consumer implementations and their validated runtime settings. The consumer retries retryable failures, routes permanent failures to the DLQ, and commits offsets before giving up partitions in a rebalance. |
+| `health` | `HealthCheckServer` exposes `/health/live` and `/health/ready` for load balancer or Kubernetes probes. |
+| `kafka` | Contains Kafka producer/consumer implementations, their validated runtime settings, and `KafkaSecuritySettings` (SASL/SSL). The consumer retries retryable failures, routes permanent failures to the DLQ, tracks readiness, and commits offsets before giving up partitions in a rebalance. |
 | `metrics` | `EventPulseMetrics` collects Prometheus counters/histogram/gauges and optionally serves them over HTTP at `/metrics`. |
 | `parser` | Converts strings such as `MESSAGE\|from=bob\|to=taylor\|content=hello` into structured `ParsedRequest` objects. |
 | `processor` | Coordinates parsing and validation, then classifies results as success, parsing error, validation error, or runtime error. |
@@ -196,6 +199,14 @@ kafka.producer.client.id=eventpulse-generator
 kafka.processing.max.attempts=3
 kafka.dlq.topic=requests-dlq
 kafka.dlq.producer.client.id=eventpulse-dlq-producer
+kafka.security.protocol=PLAINTEXT
+kafka.sasl.mechanism=
+kafka.sasl.jaas.config=
+kafka.ssl.truststore.location=
+kafka.ssl.truststore.password=
+kafka.ssl.keystore.location=
+kafka.ssl.keystore.password=
+kafka.ssl.key.password=
 validation.rules.path=
 threadpool.core.size=4
 threadpool.max.size=8
@@ -206,6 +217,9 @@ generator.max.requests=0
 metrics.enabled=true
 metrics.port=9404
 generator.metrics.port=9405
+health.enabled=true
+health.port=9414
+generator.health.port=9415
 ```
 
 Only keys already present in `application.properties` can be overridden by an external file or a
@@ -264,6 +278,71 @@ workflow below. Metrics exposed:
 
 Disable the HTTP endpoint (metrics are still collected in-process, just not exposed) with
 `-Dmetrics.enabled=false`.
+
+### Health Checks
+
+When `health.enabled=true` (the default), each app also starts a small HTTP server with two probe
+endpoints, intended for a load balancer or Kubernetes:
+
+- `EventPulseApplication` (consumer): `http://localhost:9414/health/live` and `/health/ready`
+- `RequestGeneratorApplication` (generator): `http://localhost:9415/health/live` and `/health/ready`
+
+`/health/live` returns `200 OK` for as long as the process is up - it answers "is the JVM still
+responsive," not "is it doing useful work." `/health/ready` returns `200 READY` or
+`503 NOT_READY`: for the consumer, readiness tracks whether it currently holds an assigned Kafka
+partition (via the `ConsumerRebalanceListener`), so it flips to not-ready during a rebalance and
+back once partitions are reassigned; for the generator, it simply reflects whether the send loop
+is running. Disable with `-Dhealth.enabled=false`.
+
+### Structured Logging
+
+Logs are JSON (one object per line, via `logback-classic` + `logstash-logback-encoder`) so they're
+easy to ship to a log aggregator - no plain-text log scraping required. Log levels are used
+deliberately rather than defaulting everything to INFO: per-message events on the happy path
+(a request parsed and validated successfully, a Kafka send succeeded) are DEBUG, since at any real
+throughput logging every single one at INFO would drown out everything else; parsing/validation
+failures are WARN; a message landing in the dead letter queue is WARN (it means something was *not*
+successfully processed - worth surfacing); and actual unexpected failures (a runtime error, a
+failed Kafka commit, a DLQ publish failure) are ERROR.
+
+Override the root log level without touching any file, via either a `-D` flag or an environment
+variable (the environment variable form is convenient for Docker):
+
+```bash
+mvn compile exec:java -DLOG_LEVEL=DEBUG
+# or
+LOG_LEVEL=DEBUG docker compose --profile app up -d
+```
+
+The Kafka client library's own logging is pinned to `WARN` by default (`KAFKA_LOG_LEVEL`), since
+`kafka-clients` itself logs quite chattily at INFO and would otherwise dominate the output.
+
+### Kafka Security (SASL/SSL)
+
+By default EventPulse connects to Kafka over plaintext with no authentication
+(`kafka.security.protocol=PLAINTEXT`) - correct for the bundled docker-compose broker and most local
+development. To connect to a secured cluster instead, set `kafka.security.protocol` (e.g.
+`SASL_SSL`) plus whichever of the SASL/SSL keys your protocol needs; every one of them defaults to
+blank and is simply omitted from the Kafka client properties when unset, so you only configure what
+you actually use. The same `KafkaSecuritySettings` applies uniformly to the consumer, the generator's
+producer, and the DLQ producer - one place to configure how the app talks to the cluster.
+
+```text
+kafka.security.protocol=SASL_SSL
+kafka.sasl.mechanism=PLAIN
+kafka.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="..." password="...";
+kafka.ssl.truststore.location=/certs/truststore.jks
+kafka.ssl.truststore.password=...
+kafka.ssl.keystore.location=/certs/keystore.jks
+kafka.ssl.keystore.password=...
+kafka.ssl.key.password=...
+```
+
+Treat `kafka.sasl.jaas.config` and the three `*.password` keys as secrets: put real values in an
+external config file with restricted filesystem permissions, or pass them as `-D` flags from your
+deployment tooling's own secret store - never commit them. If a `KafkaSecuritySettings` instance
+ever ends up in a log line or exception message, its `toString()` redacts all four of those fields
+(shown as `****`, or `(unset)` when blank) so credentials can't leak that way.
 
 Example: point at an external config file instead of using `-D` flags:
 
@@ -516,7 +595,15 @@ Implemented in V1:
   stable code, description, and retryability flag instead of callers inferring failure type from the
   exception class or message.
 - `ConsumerRebalanceListener` on the Kafka consumer: commits offsets synchronously before partitions are
-  revoked, avoiding reprocessing after a consumer group rebalance.
+  revoked, avoiding reprocessing after a consumer group rebalance; also drives consumer readiness.
+- Structured JSON logging (`logback-classic` + `logstash-logback-encoder`), with deliberately chosen log
+  levels (DEBUG for per-message happy-path events, WARN for DLQ/validation issues, ERROR for real
+  failures) and a `LOG_LEVEL`/`KAFKA_LOG_LEVEL` override via `-D` flag or environment variable.
+- Health check endpoints (`HealthCheckServer`): `/health/live` and `/health/ready` on both apps, with
+  consumer readiness tied to Kafka partition assignment via the rebalance listener.
+- Kafka SASL/SSL connection support (`KafkaSecuritySettings`), applied uniformly to the consumer,
+  generator producer, and DLQ producer; defaults to plaintext/no-auth so local development is
+  unaffected, and redacts secrets from its `toString()`.
 
 Not implemented yet:
 

@@ -16,8 +16,8 @@ public class KafkaRequestProducer implements AutoCloseable {
     private final Producer<String, String> producer;
     private final String topic;
 
-    public KafkaRequestProducer(KafkaProducerSettings settings) {
-        this(new KafkaProducer<>(properties(settings)), settings.topic());
+    public KafkaRequestProducer(KafkaProducerSettings settings, KafkaSecuritySettings security) {
+        this(new KafkaProducer<>(properties(settings, security)), settings.topic());
     }
 
     // Package-private constructor accepting the Producer interface (rather than the concrete
@@ -34,7 +34,9 @@ public class KafkaRequestProducer implements AutoCloseable {
                 log.error("Failed to produce request='{}'", request, exception);
                 return;
             }
-            log.info("Produced request topic={} partition={} offset={} value={}",
+            // DEBUG: fires on every successful send, which at any real throughput would drown out
+            // the rest of the log.
+            log.debug("Produced request topic={} partition={} offset={} value={}",
                     metadata.topic(), metadata.partition(), metadata.offset(), request);
         });
     }
@@ -45,7 +47,7 @@ public class KafkaRequestProducer implements AutoCloseable {
         producer.close();
     }
 
-    private static Properties properties(KafkaProducerSettings settings) {
+    private static Properties properties(KafkaProducerSettings settings, KafkaSecuritySettings security) {
         Properties properties = new Properties();
         properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, settings.bootstrapServers());
         properties.put(ProducerConfig.CLIENT_ID_CONFIG, settings.clientId());
@@ -53,6 +55,7 @@ public class KafkaRequestProducer implements AutoCloseable {
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         properties.put(ProducerConfig.ACKS_CONFIG, "all");
         properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+        security.applyTo(properties);
         return properties;
     }
 }
