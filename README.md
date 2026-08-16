@@ -63,6 +63,7 @@ See [Start Kafka with Docker Compose](#start-kafka-with-docker-compose),
 - Consumer metrics: `curl http://localhost:9404/metrics` / health: `curl http://localhost:9414/health/ready`
 - Generator metrics: `curl http://localhost:9405/metrics` / health: `curl http://localhost:9415/health/ready`
 - Kafka topic browser: `docker compose --profile ui up -d`, then open `http://localhost:8080`
+- Grafana dashboard: `docker compose --profile metrics up -d`, then open `http://localhost:3000`
 
 ## Project Structure
 
@@ -72,8 +73,13 @@ EventPulse/
 ├── LICENSE                         MIT license
 ├── Dockerfile                      Multi-stage build producing a runnable image for both apps
 ├── .dockerignore                   Excludes target/, .git/, docs/, etc. from the Docker build context
-├── docker-compose.yml              One-command local Kafka (KRaft) + optional Kafka UI/Prometheus/app containers
+├── docker-compose.yml              One-command local Kafka (KRaft) + optional Kafka UI/Prometheus/Grafana/app containers
 ├── prometheus.yml                  Prometheus scrape config for the optional docker-compose service
+├── grafana/
+│   ├── provisioning/
+│   │   ├── datasources/prometheus.yml    Auto-configured Prometheus datasource
+│   │   └── dashboards/dashboards.yml     Tells Grafana to load dashboards/ below
+│   └── dashboards/eventpulse.json  The "EventPulse Overview" dashboard definition
 ├── docs/
 │   └── v1-design.md                V1 architecture and design decisions
 ├── src/
@@ -125,8 +131,10 @@ EventPulse/
 
 | Path | Purpose |
 | --- | --- |
-| `docker-compose.yml` | Starts a single-node KRaft Kafka broker on `localhost:9092`, auto-creates the `requests` and `requests-dlq` topics, and optionally starts Kafka UI and/or Prometheus. |
+| `docker-compose.yml` | Starts a single-node KRaft Kafka broker on `localhost:9092`, auto-creates the `requests` and `requests-dlq` topics, and optionally starts Kafka UI, Prometheus, and/or Grafana. |
 | `prometheus.yml` | Scrape config used by the optional `prometheus` docker-compose service. |
+| `grafana/provisioning/` | Auto-provisions Grafana's Prometheus datasource and dashboard loader on startup - no manual UI setup. |
+| `grafana/dashboards/eventpulse.json` | The "EventPulse Overview" Grafana dashboard: request rate/latency, DLQ, retries, rebalances, Kafka commits, thread pool, JVM heap. |
 | `src/main/resources/application.properties` | Bundled default runtime settings (Kafka, retry/DLQ, thread pool, generator, validation path, metrics). |
 | `src/main/resources/validation-rules.yml` | Default YAML request validation rules. |
 | `src/main/resources/validation-rules.json` | Equivalent JSON request validation rules. |
@@ -286,6 +294,40 @@ workflow below. Metrics exposed:
 Disable the HTTP endpoint (metrics are still collected in-process, just not exposed) with
 `-Dmetrics.enabled=false`.
 
+### Grafana Dashboard
+
+`docker compose --profile metrics up -d` (same profile as Prometheus, since the dashboard is useless
+without it) also starts Grafana at `http://localhost:3000`, pre-provisioned with a Prometheus
+datasource and an "EventPulse Overview" dashboard - no manual setup. Sign in with `admin` / `admin`,
+or skip signing in entirely: anonymous viewer access is enabled by default for local convenience.
+
+The dashboard (`grafana/dashboards/eventpulse.json`) covers everything `EventPulseMetrics` exposes:
+request rate by outcome, processing latency (p50/p95/p99), dead letter rate by error code, dead
+letter publish failures, processing retries, consumer rebalance events, Kafka commit success/failure,
+generator throughput, thread pool active/queued/completed, and JVM heap usage. It's provisioned as
+a file (`grafana/provisioning/dashboards/`), so editing the JSON and restarting the `grafana`
+container picks up changes without touching the UI.
+
+Both the credentials above and anonymous access are configured for local development only
+(`docker-compose.yml`'s `grafana` service environment) - don't reuse this setup for anything
+internet-reachable.
+
+The panels have no data until Prometheus has something to scrape - either the app isn't running yet
+or `-Dmetrics.enabled=false` was passed, which disables the metrics HTTP endpoint entirely (see
+[Prometheus Metrics](#prometheus-metrics) above). Check `http://localhost:9090/targets`: both
+`eventpulse-consumer` and `eventpulse-generator` should show `UP`.
+
+A few panels (dead letter rate, publish failures, processing retries, rebalance events) only plot a
+line once that specific event has actually happened at least twice within the panel's query window -
+a request classified as `success`/`validation_error`/etc. shows up immediately since that's every
+request, but a message only reaches the dead letter queue when validation or parsing actually fails,
+so if the generator hasn't produced an invalid request yet (or its invalid-request percentage is low),
+those panels legitimately show "No data" rather than a flat zero line. If you want to confirm this is
+the reason rather than a dashboard/query problem, query the raw counter directly in Prometheus (no
+`rate()`) at `http://localhost:9090/graph`, e.g. `eventpulse_dead_letter_total` - if that also returns
+nothing, no dead-lettered message has occurred yet; if it does return a nonzero value, the counter is
+fine and the issue is in the panel's query instead.
+
 ### Health Checks
 
 When `health.enabled=true` (the default), each app also starts a small HTTP server with two probe
@@ -386,8 +428,11 @@ Optionally start Kafka UI (topic/message browser at `http://localhost:8080`):
 docker compose --profile ui up -d
 ```
 
-Optionally start Prometheus (`http://localhost:9090`), configured to scrape the EventPulse apps
-running on the host at `metrics.port` / `generator.metrics.port` (see `prometheus.yml`):
+Optionally start Prometheus (`http://localhost:9090`) and Grafana (`http://localhost:3000`, login
+`admin` / `admin` or skip the login screen entirely - anonymous viewer access is on by default).
+Prometheus is configured to scrape the EventPulse apps running on the host at `metrics.port` /
+`generator.metrics.port` (see `prometheus.yml`); Grafana comes pre-provisioned with that Prometheus
+datasource and the "EventPulse Overview" dashboard, so there's nothing to click through:
 
 ```bash
 docker compose --profile metrics up -d
@@ -655,9 +700,11 @@ Implemented in V1:
   end-to-end for both a successfully processed request and one that is dead-lettered, including
   reading the dead letter envelope back off a real topic. Runs via `mvn verify` (Maven Failsafe,
   bound separately from Surefire's unit tests) and is skipped, not failed, when Docker isn't available.
+- Grafana dashboard (`grafana/dashboards/eventpulse.json`): auto-provisioned alongside a Prometheus
+  datasource via the `docker compose --profile metrics` service, covering every `eventpulse_*`
+  metric plus JVM heap usage - no manual dashboard setup required.
 
 Not implemented yet:
 
-- Grafana dashboard.
 - User-facing configuration upload API.
 - Redis, Kubernetes, rate limiting, authentication, and frontend UI.
