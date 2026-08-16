@@ -3,3 +3,7 @@ target/
 .idea/
 .vscode/
 .DS_Store
+
+# Side effect of maven-shade-plugin (mvn package/verify): a reduced-form pom.xml the plugin writes
+# to the project root, not something that should ever be committed.
+dependency-reduced-pom.xml
