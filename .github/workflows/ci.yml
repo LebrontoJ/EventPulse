@@ -14,9 +14,12 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      # `verify` runs the full test suite and then the JaCoCo coverage-threshold check bound to the
-      # verify phase (see pom.xml), so a coverage regression fails the build. It also passes through
-      # the package phase, which builds the shaded jar used by the Dockerfile.
+      # `verify` runs the unit tests (Surefire), the Testcontainers-based integration tests in
+      # src/test/java/com/eventpulse/integration (Failsafe - these spin up a real Kafka broker in
+      # Docker, which ubuntu-latest GitHub-hosted runners provide out of the box), and then the
+      # JaCoCo coverage-threshold check, all bound to the verify phase (see pom.xml), so a failure
+      # or coverage regression in either test suite fails the build. It also passes through the
+      # package phase, which builds the shaded jar used by the Dockerfile.
       - name: Build, test, and enforce coverage
         run: mvn -B verify
       - name: Upload test reports

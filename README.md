@@ -96,7 +96,9 @@ EventPulse/
 │   │       ├── logback.xml         Structured JSON logging configuration
 │   │       ├── validation-rules.yml
 │   │       └── validation-rules.json
-│   └── test/java/com/eventpulse/   Unit tests organized by application package
+│   └── test/java/com/eventpulse/
+│       ├── integration/            Testcontainers-based end-to-end tests against a real Kafka broker
+│       └── ...                     Unit tests organized by application package
 ├── .github/workflows/ci.yml        GitHub Actions build, test, and security scan workflow
 ├── .github/dependabot.yml          Weekly dependency update PRs (Maven + GitHub Actions)
 └── target/                         Maven-generated classes, reports, and coverage
@@ -129,6 +131,7 @@ EventPulse/
 | `src/main/resources/validation-rules.yml` | Default YAML request validation rules. |
 | `src/main/resources/validation-rules.json` | Equivalent JSON request validation rules. |
 | `src/test/java/com/eventpulse/` | Unit tests for parsing, generation, processing, validation and application configuration, settings records, the thread pool, Kafka producer/consumer, and Prometheus metrics. |
+| `src/test/java/com/eventpulse/integration/` | `KafkaEndToEndIT`: end-to-end tests against a real, ephemeral Kafka broker started by Testcontainers, exercising the production consumer/producer/DLQ code paths that the `Mock*`-based unit tests above never touch. Runs via `mvn verify` (Maven Failsafe), requires Docker, and is skipped (not failed) when Docker is unavailable. |
 | `docs/v1-design.md` | More detailed V1 behavior and architecture notes. |
 | `.github/workflows/ci.yml` | Runs `mvn verify` (tests + JaCoCo coverage gate + shaded-jar build), uploads test/coverage reports, builds the Docker image, and runs Trivy dependency/image vulnerability scans, on pushes and pull requests. |
 | `.github/dependabot.yml` | Opens a weekly PR for outdated Maven dependencies and GitHub Actions versions. |
@@ -488,10 +491,45 @@ If a topic already exists, Kafka will report that and you can continue.
 
 ## Run Tests
 
+The test suite has two tiers, run by two different Maven plugins so they can be run independently:
+
+| Tier | Where | Runner | Command | Needs Docker? |
+| --- | --- | --- | --- | --- |
+| Unit tests | `src/test/java/com/eventpulse/**/*Test.java` | Surefire | `mvn test` | No |
+| Integration tests | `src/test/java/com/eventpulse/integration/*IT.java` | Failsafe | `mvn verify` | Yes |
+
+Fast unit tests only (`Mock*`-based - `MockConsumer`/`MockProducer` stand in for Kafka, so these run
+in milliseconds with no external dependencies):
+
 ```bash
 cd /Users/lebronjames/Documents/EventPulse
 mvn test
 ```
+
+Unit tests plus the Testcontainers-based integration tests, which start a real, ephemeral Kafka
+broker in Docker and exercise the production (non-Mock) consumer/producer/DLQ code paths against
+it — requires a running Docker daemon:
+
+```bash
+cd /Users/lebronjames/Documents/EventPulse
+mvn verify
+```
+
+`KafkaEndToEndIT` (the one integration test class today) covers two scenarios end to end - produce
+a real record, run the real consumer against a real broker, and check the outcome:
+
+- **Valid request**: processed successfully, offset committed, and confirmed to never reach the
+  dead letter topic.
+- **Invalid request**: routed to the real `requests-dlq`-style topic, then read back with an
+  independent consumer to confirm the JSON `DeadLetterEnvelope` (`errorCode`, `attempts`,
+  `rawRequest`) is exactly what a real downstream consumer would see.
+
+The first `mvn verify` on a machine pulls two Docker images (a small `testcontainers/ryuk` reaper
+container plus `apache/kafka-native`), so it takes noticeably longer than later runs, which reuse
+the cached images - the broker container itself then starts in about a second. `mvn verify` is also
+what CI runs, and what enforces the JaCoCo coverage threshold (see "Coverage threshold enforcement"
+under V1 Implementation Status below). If Docker isn't available, the integration tests are skipped
+automatically (`@Testcontainers(disabledWithoutDocker = true)`) rather than failing the build.
 
 ## Start EventPulse
 
@@ -612,10 +650,14 @@ Implemented in V1:
 - Dependency and Docker image vulnerability scanning (Trivy, in CI) plus weekly automated dependency
   update PRs (Dependabot, for both Maven and GitHub Actions).
 - MIT `LICENSE`.
+- Integration tests against a real Kafka broker (`KafkaEndToEndIT`, via Testcontainers): a real
+  broker is started in Docker and the production consumer/producer/DLQ constructors are exercised
+  end-to-end for both a successfully processed request and one that is dead-lettered, including
+  reading the dead letter envelope back off a real topic. Runs via `mvn verify` (Maven Failsafe,
+  bound separately from Surefire's unit tests) and is skipped, not failed, when Docker isn't available.
 
 Not implemented yet:
 
 - Grafana dashboard.
 - User-facing configuration upload API.
-- Integration tests with a real Kafka broker (e.g. via Testcontainers).
 - Redis, Kubernetes, rate limiting, authentication, and frontend UI.
