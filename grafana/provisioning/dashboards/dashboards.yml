@@ -1,0 +1,16 @@
+# Tells Grafana to auto-load every dashboard JSON file found under the mounted
+# /var/lib/grafana/dashboards directory (see docker-compose.yml volumes) on startup, and to keep
+# polling it every 30s for changes - so editing grafana/dashboards/eventpulse.json and restarting
+# (or just waiting) picks up changes without touching the Grafana UI.
+apiVersion: 1
+
+providers:
+  - name: EventPulse
+    orgId: 1
+    folder: EventPulse
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

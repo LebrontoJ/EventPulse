@@ -76,6 +76,29 @@ services:
       # Resolves automatically on Docker Desktop; host-gateway makes it work on Linux too.
       - "host.docker.internal:host-gateway"
 
+  # Optional Grafana, provisioned automatically with a Prometheus datasource and the EventPulse
+  # dashboard (see grafana/) - no manual setup needed after it starts. Same profile as prometheus
+  # since the dashboard is useless without it. Start with: docker compose --profile metrics up -d
+  grafana:
+    image: grafana/grafana:latest
+    container_name: eventpulse-grafana
+    profiles: ["metrics"]
+    ports:
+      - "3000:3000"
+    environment:
+      # Local-dev-only convenience: a fixed admin password (skips Grafana's forced first-login
+      # change) plus anonymous read-only access, so the dashboard is one click away with no login
+      # at all. Do not reuse this configuration for anything internet-reachable.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
   # Containerized consumer and generator, built from the project's Dockerfile. Optional: the apps
   # can also be run directly on the host with `mvn compile exec:java` (see README). Start with:
   # docker compose --profile app up -d --build

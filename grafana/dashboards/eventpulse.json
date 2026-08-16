@@ -1,0 +1,225 @@
+{
+  "id": null,
+  "uid": "eventpulse-overview",
+  "title": "EventPulse Overview",
+  "description": "Request throughput, reliability (DLQ/retries/rebalances), Kafka commits, thread pool, and JVM health for the EventPulse consumer and generator, backed by the eventpulse_* / jvm_* Prometheus metrics exposed by EventPulseMetrics.",
+  "tags": ["eventpulse", "kafka"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request Rate by Outcome",
+      "description": "eventpulse_requests_total, by status. Sustained non-success shows up here before it shows up as a customer-visible problem.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (status) (rate(eventpulse_requests_total[1m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Request Processing Latency",
+      "description": "p50/p95/p99 of eventpulse_request_processing_duration_seconds (parse + validate time).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(eventpulse_request_processing_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(eventpulse_request_processing_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(eventpulse_request_processing_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Dead Letter Rate by Error Code",
+      "description": "eventpulse_dead_letter_total, by error_code (see com.eventpulse.error.ErrorCode). Should track parsing/validation/runtime failures upstream.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (error_code) (rate(eventpulse_dead_letter_total[5m]))",
+          "legendFormat": "{{error_code}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Dead Letter Publish Failures",
+      "description": "eventpulse_dead_letter_publish_failures_total rate. Non-zero means messages are being lost, not just dead-lettered - the DLQ producer itself is failing. Should always be flat zero.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(eventpulse_dead_letter_publish_failures_total[5m])",
+          "legendFormat": "publish failures"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Processing Retries",
+      "description": "eventpulse_processing_retries_total rate: additional attempts beyond the first, for RUNTIME_ERROR results that were retried (see KafkaRequestConsumer#processAndRecord).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(eventpulse_processing_retries_total[5m])",
+          "legendFormat": "retries"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Consumer Rebalance Events",
+      "description": "eventpulse_consumer_rebalance_events_total, by event_type (assigned/revoked). Frequent rebalancing usually means consumer instability worth investigating.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (event_type) (rate(eventpulse_consumer_rebalance_events_total[5m]))",
+          "legendFormat": "{{event_type}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Kafka Offset Commits",
+      "description": "eventpulse_kafka_commits_total vs eventpulse_kafka_commit_failures_total. Any sustained failure rate here means the consumer is at risk of reprocessing on restart.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(eventpulse_kafka_commits_total[5m])",
+          "legendFormat": "commits"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(eventpulse_kafka_commit_failures_total[5m])",
+          "legendFormat": "commit failures"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Generator Requests Sent",
+      "description": "eventpulse_generator_requests_sent_total rate: throughput of the simulated request producer feeding the requests topic.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(eventpulse_generator_requests_sent_total[5m])",
+          "legendFormat": "generated"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Thread Pool: Active & Queued",
+      "description": "eventpulse_threadpool_active_threads and eventpulse_threadpool_queued_tasks. A queue that keeps growing means the consumer is falling behind - increase threadpool.max.size/queue.capacity or investigate slow processing.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "eventpulse_threadpool_active_threads",
+          "legendFormat": "active threads"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "eventpulse_threadpool_queued_tasks",
+          "legendFormat": "queued tasks"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Thread Pool: Completed Tasks",
+      "description": "Current value of eventpulse_threadpool_completed_tasks (a monotonically increasing gauge, not a counter - shown as a running total rather than a rate).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 32, "w": 6, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "eventpulse_threadpool_completed_tasks",
+          "legendFormat": "completed"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "JVM Heap Used",
+      "description": "jvm_memory_used_bytes{area=\"heap\"}, from the standard client_java JvmMetrics registered alongside EventPulse's own metrics.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 18, "y": 32, "w": 6, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "jvm_memory_used_bytes{area=\"heap\"}",
+          "legendFormat": "{{job}} heap used"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# Auto-provisions the Prometheus datasource on Grafana startup - no manual "Add data source" step.
+# Mounted read-only into the grafana container at /etc/grafana/provisioning/datasources (see
+# docker-compose.yml). The fixed `uid` lets grafana/dashboards/eventpulse.json reference this exact
+# datasource deterministically instead of relying on Grafana's template-variable substitution.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    # Container-to-container DNS name from the shared docker-compose network; only reachable when
+    # the prometheus service (same "metrics" profile) is also running.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
